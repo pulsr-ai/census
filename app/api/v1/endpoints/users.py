@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
+from sqlalchemy.sql import func
 from typing import List
 from ....core import models, auth
 from ....core.database import get_db
@@ -132,9 +134,9 @@ def create_user_field_value(
             detail="User not found"
         )
     
-    # Check permissions: users can only set their own fields unless they have set_any permission
+    # Allow users to set their own field values, or any if they're admin
     if str(current_user.id) != user_id:
-        if not auth.check_user_permission(db, current_user, "field_values:set_any"):
+        if not auth.is_admin(db, current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only set your own field values"
@@ -241,3 +243,176 @@ def remove_user_from_group(
         db.commit()
     
     return {"message": "User removed from group successfully"}
+
+@router.post("/{user_id}/service-access", response_model=schemas.UserServiceSubtenant)
+def grant_user_service_access(
+    user_id: str,
+    service_access: schemas.UserServiceSubtenantGrant,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Check if user already has active access to this service
+    existing_access = db.query(models.UserServiceSubtenant).filter(
+        and_(
+            models.UserServiceSubtenant.user_id == user_id,
+            models.UserServiceSubtenant.service == service_access.service,
+            models.UserServiceSubtenant.active == True
+        )
+    ).first()
+    
+    if existing_access:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"User already has active access to service {service_access.service}"
+        )
+    
+    db_service_access = models.UserServiceSubtenant(
+        user_id=user_id,
+        service=service_access.service,
+        subtenant_id=service_access.subtenant_id,
+        granted_by=service_access.granted_by or current_user.id
+    )
+    
+    db.add(db_service_access)
+    db.commit()
+    db.refresh(db_service_access)
+    return db_service_access
+
+@router.delete("/{user_id}/service-access/{service}/{subtenant_id}")
+def revoke_user_service_access(
+    user_id: str,
+    service: str,
+    subtenant_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    service_access = db.query(models.UserServiceSubtenant).filter(
+        and_(
+            models.UserServiceSubtenant.user_id == user_id,
+            models.UserServiceSubtenant.service == service,
+            models.UserServiceSubtenant.subtenant_id == subtenant_id,
+            models.UserServiceSubtenant.active == True
+        )
+    ).first()
+    
+    if not service_access:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Service access not found or already revoked"
+        )
+    
+    service_access.active = False
+    service_access.revoked_at = func.now()
+    service_access.revoked_by = current_user.id
+    
+    db.commit()
+    return {"message": "Service access revoked successfully"}
+
+@router.get("/{user_id}/service-access", response_model=List[schemas.UserServiceSubtenant])
+def list_user_service_access(
+    user_id: str,
+    active_only: bool = True,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    query = db.query(models.UserServiceSubtenant).filter(
+        models.UserServiceSubtenant.user_id == user_id
+    )
+    
+    if active_only:
+        query = query.filter(models.UserServiceSubtenant.active == True)
+    
+    service_access_list = query.order_by(models.UserServiceSubtenant.granted_at.desc()).all()
+    return service_access_list
+
+@router.get("/{user_id}/access/{service}/{subtenant_id}", response_model=schemas.UserAccessCheck)
+def check_user_access(
+    user_id: str,
+    service: str,
+    subtenant_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    service_access = db.query(models.UserServiceSubtenant).filter(
+        and_(
+            models.UserServiceSubtenant.user_id == user_id,
+            models.UserServiceSubtenant.service == service,
+            models.UserServiceSubtenant.subtenant_id == subtenant_id,
+            models.UserServiceSubtenant.active == True
+        )
+    ).first()
+    
+    return schemas.UserAccessCheck(
+        has_access=service_access is not None,
+        access_details=service_access
+    )
+
+@router.get("/{user_id}/groups", response_model=List[schemas.UserGroupSummary])
+def get_user_groups(
+    user_id: str,
+    active_only: bool = True,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    query = db.query(
+        models.GroupMember.group_id,
+        models.Group.name.label('group_name'),
+        models.GroupMember.role,
+        models.GroupMember.added_at,
+        models.GroupMember.active
+    ).join(
+        models.Group, models.GroupMember.group_id == models.Group.id
+    ).filter(
+        models.GroupMember.user_id == user_id
+    )
+    
+    if active_only:
+        query = query.filter(models.GroupMember.active == True)
+    
+    memberships = query.order_by(models.GroupMember.added_at.desc()).all()
+    
+    return [
+        schemas.UserGroupSummary(
+            group_id=membership.group_id,
+            group_name=membership.group_name,
+            role=membership.role,
+            added_at=membership.added_at,
+            active=membership.active
+        )
+        for membership in memberships
+    ]

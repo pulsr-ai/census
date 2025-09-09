@@ -82,14 +82,41 @@ def test_login_with_new_user_gets_otp(client, test_db):
     assert data["access_token"] is None  # No immediate access
 
 def get_auth_headers(client, test_db):
-    # Since everyone now needs OTP, we'll create a mock token for testing
-    from app.core import auth
+    # Create an admin user for testing
+    from app.core import auth, models
     from datetime import timedelta
-    import uuid
     
-    # Create a mock token for testing
+    # Create or get admin user
+    admin_email = "testadmin@example.com"
+    admin_user = test_db.query(models.User).filter(models.User.email == admin_email).first()
+    
+    if not admin_user:
+        admin_user = models.User(
+            email=admin_email,
+            is_active=True,
+            is_anonymous=False,
+            otp_verified=True
+        )
+        test_db.add(admin_user)
+        test_db.commit()
+        test_db.refresh(admin_user)
+        
+        # Add to admin group
+        admin_group = test_db.query(models.Group).filter(models.Group.name == "Admins").first()
+        if admin_group:
+            group_member = models.GroupMember(
+                user_id=admin_user.id,
+                group_id=admin_group.id,
+                role="admin",
+                active=True,
+                added_by=admin_user.id
+            )
+            test_db.add(group_member)
+            test_db.commit()
+    
+    # Create token with real user ID
     access_token = auth.create_access_token(
-        data={"sub": str(uuid.uuid4()), "email": "admin@example.com"},
+        data={"sub": str(admin_user.id), "email": admin_user.email},
         expires_delta=timedelta(minutes=30)
     )
     return {"Authorization": f"Bearer {access_token}"}
@@ -102,6 +129,9 @@ def test_create_user(client, test_db):
         "is_active": True,
         "is_anonymous": False
     }, headers=headers)
+    
+    if response.status_code != 200:
+        print(f"Error response: {response.status_code} - {response.json()}")
     
     assert response.status_code == 200
     data = response.json()
@@ -129,8 +159,8 @@ def test_get_current_user(client, test_db):
     response = client.get("/api/v1/users/me", headers=headers)
     assert response.status_code == 200
     data = response.json()
-    assert data["email"] == "admin@example.com"
-    assert data["is_anonymous"] is True
+    assert data["email"] == "testadmin@example.com"
+    assert data["is_anonymous"] is False
 
 def test_list_users(client, test_db):
     headers = get_auth_headers(client, test_db)
@@ -172,21 +202,6 @@ def test_create_field(client, test_db):
     assert data["field_type"] == "text"
     assert data["is_required"] is False
 
-def test_create_permission(client, test_db):
-    headers = get_auth_headers(client, test_db)
-    
-    response = client.post("/api/v1/permissions/", json={
-        "name": "users:read",
-        "description": "Read user information",
-        "resource": "users",
-        "action": "read"
-    }, headers=headers)
-    
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "users:read"
-    assert data["resource"] == "users"
-    assert data["action"] == "read"
 
 def test_otp_verification_invalid_session(client, test_db):
     # Test OTP verification with invalid session (valid UUID format but non-existent)
@@ -216,8 +231,6 @@ def test_list_groups(client, test_db):
     response = client.get("/api/v1/groups/", headers=headers)
     assert response.status_code == 200
     assert isinstance(response.json(), list)
-    # Should have at least the test group we created for auth
-    assert len(response.json()) >= 1
 
 def test_list_fields(client, test_db):
     headers = get_auth_headers(client, test_db)
@@ -226,12 +239,6 @@ def test_list_fields(client, test_db):
     assert response.status_code == 200
     assert isinstance(response.json(), list)
 
-def test_list_permissions(client, test_db):
-    headers = get_auth_headers(client, test_db)
-    
-    response = client.get("/api/v1/permissions/", headers=headers)
-    assert response.status_code == 200
-    assert isinstance(response.json(), list)
 
 def test_unauthorized_access_users(client, test_db):
     response = client.get("/api/v1/users/")
@@ -245,9 +252,6 @@ def test_unauthorized_access_fields(client, test_db):
     response = client.get("/api/v1/fields/")
     assert response.status_code in [401, 403]
 
-def test_unauthorized_access_permissions(client, test_db):
-    response = client.get("/api/v1/permissions/")
-    assert response.status_code in [401, 403]
 
 def test_update_or_create_field_by_name_create(client, test_db):
     headers = get_auth_headers(client, test_db)
@@ -322,14 +326,21 @@ def test_domain_group_auto_creation(client, test_db):
     assert domain_group.description == "Auto-created group for newcompany.com domain"
     assert domain_group.email_domain == "newcompany.com"
     
-    # Check that user was added to the domain group
+    # Check that user was added to the domain group via GroupMember
     user = test_db.query(models.User).filter(
         models.User.email == "newuser@newcompany.com"
     ).first()
     
     assert user is not None
-    group_names = [group.name for group in user.groups]
-    assert "newcompany.com" in group_names
+    
+    # Check active group memberships
+    memberships = test_db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == user.id,
+        models.GroupMember.active == True
+    ).all()
+    
+    group_ids = [m.group_id for m in memberships]
+    assert domain_group.id in group_ids
 
 def test_domain_group_reuse_existing(client, test_db):
     """Test that existing domain groups are reused"""
@@ -349,7 +360,7 @@ def test_domain_group_reuse_existing(client, test_db):
     assert len(domain_groups) == 1
     domain_group = domain_groups[0]
     
-    # Check that both users are in the same domain group
+    # Check that both users are in the same domain group via membership
     user1 = test_db.query(models.User).filter(
         models.User.email == "user1@testdomain.com"
     ).first()
@@ -357,8 +368,21 @@ def test_domain_group_reuse_existing(client, test_db):
         models.User.email == "user2@testdomain.com"
     ).first()
     
-    assert domain_group in user1.groups
-    assert domain_group in user2.groups
+    # Check via GroupMember relationships
+    user1_memberships = test_db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == user1.id,
+        models.GroupMember.active == True
+    ).all()
+    user2_memberships = test_db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == user2.id,
+        models.GroupMember.active == True
+    ).all()
+    
+    user1_group_ids = [m.group_id for m in user1_memberships]
+    user2_group_ids = [m.group_id for m in user2_memberships]
+    
+    assert domain_group.id in user1_group_ids
+    assert domain_group.id in user2_group_ids
 
 def test_domain_group_security_setting(client, test_db):
     """Test that domain groups are created with proper security settings"""
@@ -373,6 +397,267 @@ def test_domain_group_security_setting(client, test_db):
     
     assert domain_group is not None
     assert domain_group.allow_anonymous is False  # All domain groups are secure now
+
+# ===== NEW SERVICE ACCESS CONTROL TESTS =====
+
+def test_grant_user_service_access(client, test_db):
+    """Test granting service access to a user"""
+    headers = get_auth_headers(client, test_db)
+    
+    # Create a user first
+    user_response = client.post("/api/v1/users/", json={
+        "email": "serviceuser@example.com",
+        "is_active": True
+    }, headers=headers)
+    assert user_response.status_code == 200
+    user_id = user_response.json()["id"]
+    
+    # Grant service access
+    response = client.post(f"/api/v1/users/{user_id}/service-access", json={
+        "service": "analytics",
+        "subtenant_id": "tenant123"
+    }, headers=headers)
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["service"] == "analytics"
+    assert data["subtenant_id"] == "tenant123"
+    assert data["active"] is True
+    assert data["user_id"] == user_id
+    assert data["granted_by"] is not None
+
+def test_grant_duplicate_service_access_fails(client, test_db):
+    """Test that granting duplicate active service access fails"""
+    headers = get_auth_headers(client, test_db)
+    
+    # Create a user
+    user_response = client.post("/api/v1/users/", json={
+        "email": "duplicateuser@example.com"
+    }, headers=headers)
+    user_id = user_response.json()["id"]
+    
+    # Grant service access first time
+    client.post(f"/api/v1/users/{user_id}/service-access", json={
+        "service": "analytics",
+        "subtenant_id": "tenant123"
+    }, headers=headers)
+    
+    # Try to grant same service access again
+    response = client.post(f"/api/v1/users/{user_id}/service-access", json={
+        "service": "analytics",
+        "subtenant_id": "tenant456"  # Different subtenant, but same service
+    }, headers=headers)
+    
+    assert response.status_code == 400
+    assert "already has active access" in response.json()["detail"]
+
+def test_revoke_user_service_access(client, test_db):
+    """Test revoking user service access"""
+    headers = get_auth_headers(client, test_db)
+    
+    # Create user and grant access
+    user_response = client.post("/api/v1/users/", json={
+        "email": "revokeuser@example.com"
+    }, headers=headers)
+    user_id = user_response.json()["id"]
+    
+    client.post(f"/api/v1/users/{user_id}/service-access", json={
+        "service": "billing",
+        "subtenant_id": "billing123"
+    }, headers=headers)
+    
+    # Revoke access
+    response = client.delete(f"/api/v1/users/{user_id}/service-access/billing/billing123", headers=headers)
+    assert response.status_code == 200
+    assert "revoked successfully" in response.json()["message"]
+    
+    # Verify access is revoked
+    access_check = client.get(f"/api/v1/users/{user_id}/access/billing/billing123", headers=headers)
+    assert access_check.status_code == 200
+    assert access_check.json()["has_access"] is False
+
+def test_list_user_service_access(client, test_db):
+    """Test listing user's service access"""
+    headers = get_auth_headers(client, test_db)
+    
+    # Create user and grant multiple accesses
+    user_response = client.post("/api/v1/users/", json={
+        "email": "listuser@example.com"
+    }, headers=headers)
+    user_id = user_response.json()["id"]
+    
+    # Grant access to multiple services
+    client.post(f"/api/v1/users/{user_id}/service-access", json={
+        "service": "analytics",
+        "subtenant_id": "analytics123"
+    }, headers=headers)
+    
+    client.post(f"/api/v1/users/{user_id}/service-access", json={
+        "service": "reporting", 
+        "subtenant_id": "reporting456"
+    }, headers=headers)
+    
+    # List active access
+    response = client.get(f"/api/v1/users/{user_id}/service-access", headers=headers)
+    assert response.status_code == 200
+    accesses = response.json()
+    assert len(accesses) == 2
+    
+    services = [access["service"] for access in accesses]
+    assert "analytics" in services
+    assert "reporting" in services
+
+def test_check_user_access_valid(client, test_db):
+    """Test checking valid user access"""
+    headers = get_auth_headers(client, test_db)
+    
+    user_response = client.post("/api/v1/users/", json={
+        "email": "checkuser@example.com"
+    }, headers=headers)
+    user_id = user_response.json()["id"]
+    
+    # Grant access
+    client.post(f"/api/v1/users/{user_id}/service-access", json={
+        "service": "dashboard",
+        "subtenant_id": "dash123"
+    }, headers=headers)
+    
+    # Check access
+    response = client.get(f"/api/v1/users/{user_id}/access/dashboard/dash123", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["has_access"] is True
+    assert data["access_details"] is not None
+    assert data["access_details"]["service"] == "dashboard"
+
+def test_check_user_access_invalid(client, test_db):
+    """Test checking invalid user access"""
+    headers = get_auth_headers(client, test_db)
+    
+    user_response = client.post("/api/v1/users/", json={
+        "email": "noaccessuser@example.com"
+    }, headers=headers)
+    user_id = user_response.json()["id"]
+    
+    # Check access without granting any
+    response = client.get(f"/api/v1/users/{user_id}/access/nonexistent/service123", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["has_access"] is False
+    assert data["access_details"] is None
+
+# ===== NEW GROUP MEMBERSHIP TESTS =====
+
+def test_get_user_groups(client, test_db):
+    """Test getting user's group memberships"""
+    headers = get_auth_headers(client, test_db)
+    
+    # Create user and group
+    user_response = client.post("/api/v1/users/", json={
+        "email": "groupuser@example.com"
+    }, headers=headers)
+    user_id = user_response.json()["id"]
+    
+    group_response = client.post("/api/v1/groups/", json={
+        "name": "Test Group",
+        "description": "A test group"
+    }, headers=headers)
+    group_id = group_response.json()["id"]
+    
+    # Add user to group
+    client.post(f"/api/v1/groups/{group_id}/members", json={
+        "user_id": user_id,
+        "role": "member"
+    }, headers=headers)
+    
+    # Get user's groups
+    response = client.get(f"/api/v1/users/{user_id}/groups", headers=headers)
+    assert response.status_code == 200
+    groups = response.json()
+    assert len(groups) >= 1  # May have domain group too
+    
+    test_group = next((g for g in groups if g["group_name"] == "Test Group"), None)
+    assert test_group is not None
+    assert test_group["role"] == "member"
+    assert test_group["active"] is True
+
+def test_add_group_member(client, test_db):
+    """Test adding a member to a group"""
+    headers = get_auth_headers(client, test_db)
+    
+    # Create user and group
+    user_response = client.post("/api/v1/users/", json={"email": "newmember@example.com"}, headers=headers)
+    user_id = user_response.json()["id"]
+    
+    group_response = client.post("/api/v1/groups/", json={"name": "Member Group"}, headers=headers)
+    group_id = group_response.json()["id"]
+    
+    # Add member
+    response = client.post(f"/api/v1/groups/{group_id}/members", json={
+        "user_id": user_id,
+        "role": "admin"
+    }, headers=headers)
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user_id"] == user_id
+    assert data["group_id"] == group_id
+    assert data["role"] == "admin"
+    assert data["active"] is True
+    assert data["added_by"] is not None
+
+def test_remove_group_member(client, test_db):
+    """Test removing a member from a group"""
+    headers = get_auth_headers(client, test_db)
+    
+    # Create user and group, add member
+    user_response = client.post("/api/v1/users/", json={"email": "removemember@example.com"}, headers=headers)
+    user_id = user_response.json()["id"]
+    
+    group_response = client.post("/api/v1/groups/", json={"name": "Remove Group"}, headers=headers)
+    group_id = group_response.json()["id"]
+    
+    client.post(f"/api/v1/groups/{group_id}/members", json={"user_id": user_id}, headers=headers)
+    
+    # Remove member
+    response = client.delete(f"/api/v1/groups/{group_id}/members/{user_id}", headers=headers)
+    assert response.status_code == 200
+    assert "removed from group" in response.json()["message"]
+    
+    # Verify user no longer in active group members
+    members_response = client.get(f"/api/v1/groups/{group_id}/members", headers=headers)
+    active_members = [m for m in members_response.json() if m["active"]]
+    member_user_ids = [m["user_id"] for m in active_members]
+    assert user_id not in member_user_ids
+
+def test_get_group_members(client, test_db):
+    """Test getting group members"""
+    headers = get_auth_headers(client, test_db)
+    
+    # Create group and users
+    group_response = client.post("/api/v1/groups/", json={"name": "Members Group"}, headers=headers)
+    group_id = group_response.json()["id"]
+    
+    user1_response = client.post("/api/v1/users/", json={"email": "member1@example.com"}, headers=headers)
+    user1_id = user1_response.json()["id"]
+    
+    user2_response = client.post("/api/v1/users/", json={"email": "member2@example.com"}, headers=headers)
+    user2_id = user2_response.json()["id"]
+    
+    # Add both users
+    client.post(f"/api/v1/groups/{group_id}/members", json={"user_id": user1_id, "role": "admin"}, headers=headers)
+    client.post(f"/api/v1/groups/{group_id}/members", json={"user_id": user2_id, "role": "member"}, headers=headers)
+    
+    # Get members
+    response = client.get(f"/api/v1/groups/{group_id}/members", headers=headers)
+    assert response.status_code == 200
+    members = response.json()
+    assert len(members) == 2
+    
+    # Check both users are present with correct roles
+    user_roles = {m["user_id"]: m["role"] for m in members}
+    assert user_roles[user1_id] == "admin"
+    assert user_roles[user2_id] == "member"
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

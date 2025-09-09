@@ -231,60 +231,35 @@ def get_or_create_user(db: Session, email: str, is_anonymous: bool = False) -> m
         
         db.commit()
     
-    # Add user to the domain group
-    if domain_group not in user.groups:
-        user.groups.append(domain_group)
+    # Add user to the domain group using new GroupMember model
+    existing_membership = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == user.id,
+        models.GroupMember.group_id == domain_group.id,
+        models.GroupMember.active == True
+    ).first()
+    
+    if not existing_membership:
+        group_member = models.GroupMember(
+            user_id=user.id,
+            group_id=domain_group.id,
+            role="member",
+            active=True,
+            added_by=user.id  # Self-assigned
+        )
+        db.add(group_member)
         db.commit()
     
     return user
 
 
-def check_user_permission(db: Session, user: models.User, permission_name: str) -> bool:
-    """Check if user has a specific permission (directly or through groups)"""
-    
-    # Get permission by name
-    permission = db.query(models.Permission).filter(
-        models.Permission.name == permission_name
+def is_admin(db: Session, user: models.User) -> bool:
+    """Check if user is in the Admins group using new GroupMember model"""
+    admin_membership = db.query(models.GroupMember).join(
+        models.Group, models.GroupMember.group_id == models.Group.id
+    ).filter(
+        models.GroupMember.user_id == user.id,
+        models.Group.name == "Admins",
+        models.GroupMember.active == True
     ).first()
     
-    if not permission:
-        return False
-    
-    # Check direct user permissions
-    user_perm = db.query(models.UserPermission).filter(
-        models.UserPermission.user_id == user.id,
-        models.UserPermission.permission_id == permission.id
-    ).first()
-    
-    if user_perm:
-        return True
-    
-    # Check group permissions
-    for group in user.groups:
-        group_perm = db.query(models.GroupPermission).filter(
-            models.GroupPermission.group_id == group.id,
-            models.GroupPermission.permission_id == permission.id
-        ).first()
-        
-        if group_perm:
-            return True
-    
-    return False
-
-def require_permission(permission_name: str):
-    """Dependency to require a specific permission"""
-    def permission_checker(
-        current_user: models.User = Depends(get_current_active_user),
-        db: Session = Depends(get_db)
-    ):
-        if not check_user_permission(db, current_user, permission_name):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission '{permission_name}' required"
-            )
-        return current_user
-    return permission_checker
-
-def is_admin(user: models.User) -> bool:
-    """Check if user is in the Admins group"""
-    return any(group.name == "Admins" for group in user.groups)
+    return admin_membership is not None
