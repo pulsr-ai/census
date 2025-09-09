@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
+from sqlalchemy.sql import func
 from typing import List
 from ....core import models, auth
 from ....core.database import get_db
@@ -113,9 +115,10 @@ def delete_group(
     db.commit()
     return {"message": "Group deleted successfully"}
 
-@router.get("/{group_id}/users", response_model=List[schemas.User])
-def get_group_users(
+@router.get("/{group_id}/members", response_model=List[schemas.GroupMember])
+def get_group_members(
     group_id: str,
+    active_only: bool = True,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
@@ -126,12 +129,20 @@ def get_group_users(
             detail="Group not found"
         )
     
-    return group.users
+    query = db.query(models.GroupMember).filter(
+        models.GroupMember.group_id == group_id
+    )
+    
+    if active_only:
+        query = query.filter(models.GroupMember.active == True)
+    
+    members = query.order_by(models.GroupMember.added_at.desc()).all()
+    return members
 
-@router.post("/{group_id}/permissions", response_model=schemas.GroupPermission)
-def create_group_permission(
+@router.post("/{group_id}/members", response_model=schemas.GroupMember)
+def add_group_member(
     group_id: str,
-    permission: schemas.GroupPermissionCreate,
+    member: schemas.GroupMemberCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
@@ -143,44 +154,49 @@ def create_group_permission(
             detail="Group not found"
         )
     
-    # Check if permission exists
-    perm = db.query(models.Permission).filter(
-        models.Permission.id == permission.permission_id
-    ).first()
-    if not perm:
+    # Check if user exists
+    user = db.query(models.User).filter(models.User.id == member.user_id).first()
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Permission not found"
+            detail="User not found"
         )
     
-    # Check if group permission already exists
-    existing_permission = db.query(models.GroupPermission).filter(
-        models.GroupPermission.group_id == group_id,
-        models.GroupPermission.permission_id == permission.permission_id
+    # Check if user already has active membership
+    existing_membership = db.query(models.GroupMember).filter(
+        and_(
+            models.GroupMember.group_id == group_id,
+            models.GroupMember.user_id == member.user_id,
+            models.GroupMember.active == True
+        )
     ).first()
     
-    if existing_permission:
-        existing_permission.value = permission.value
-        db.commit()
-        db.refresh(existing_permission)
-        return existing_permission
+    if existing_membership:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already an active member of this group"
+        )
     
-    db_permission = models.GroupPermission(
+    db_member = models.GroupMember(
         group_id=group_id,
-        permission_id=permission.permission_id,
-        value=permission.value
+        user_id=member.user_id,
+        role=member.role,
+        added_by=member.added_by or current_user.id
     )
-    db.add(db_permission)
+    
+    db.add(db_member)
     db.commit()
-    db.refresh(db_permission)
-    return db_permission
+    db.refresh(db_member)
+    return db_member
 
-@router.get("/{group_id}/permissions", response_model=List[schemas.GroupPermission])
-def get_group_permissions(
+@router.delete("/{group_id}/members/{user_id}")
+def remove_group_member(
     group_id: str,
+    user_id: str,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Check if group exists
     group = db.query(models.Group).filter(models.Group.id == group_id).first()
     if not group:
         raise HTTPException(
@@ -188,29 +204,25 @@ def get_group_permissions(
             detail="Group not found"
         )
     
-    permissions = db.query(models.GroupPermission).filter(
-        models.GroupPermission.group_id == group_id
-    ).all()
-    return permissions
-
-@router.delete("/{group_id}/permissions/{permission_id}")
-def delete_group_permission(
-    group_id: str,
-    permission_id: str,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_active_user)
-):
-    group_permission = db.query(models.GroupPermission).filter(
-        models.GroupPermission.group_id == group_id,
-        models.GroupPermission.permission_id == permission_id
+    # Find active membership
+    membership = db.query(models.GroupMember).filter(
+        and_(
+            models.GroupMember.group_id == group_id,
+            models.GroupMember.user_id == user_id,
+            models.GroupMember.active == True
+        )
     ).first()
     
-    if not group_permission:
+    if not membership:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Group permission not found"
+            detail="Active group membership not found"
         )
     
-    db.delete(group_permission)
+    membership.active = False
+    membership.removed_at = func.now()
+    membership.removed_by = current_user.id
+    
     db.commit()
-    return {"message": "Group permission deleted successfully"}
+    return {"message": "User removed from group successfully"}
+

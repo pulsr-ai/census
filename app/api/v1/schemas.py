@@ -91,54 +91,59 @@ class FieldValue(FieldValueBase):
     class Config:
         from_attributes = True
 
-class PermissionBase(BaseModel):
-    name: str
-    description: Optional[str] = None
-    resource: str
-    action: str
+class GroupMemberBase(BaseModel):
+    role: Optional[str] = None
 
-class PermissionCreate(PermissionBase):
-    pass
-
-class Permission(PermissionBase):
-    id: UUID4
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-class UserPermissionBase(BaseModel):
-    value: Optional[str] = None
-
-class UserPermissionCreate(UserPermissionBase):
-    permission_id: UUID4
-
-class UserPermission(UserPermissionBase):
-    id: UUID4
+class GroupMemberCreate(GroupMemberBase):
     user_id: UUID4
-    permission_id: UUID4
-    granted_at: datetime
-    permission: Optional[Permission] = None
+    added_by: Optional[UUID4] = None
 
-    class Config:
-        from_attributes = True
-
-class GroupPermissionBase(BaseModel):
-    value: Optional[str] = None
-
-class GroupPermissionCreate(GroupPermissionBase):
-    permission_id: UUID4
-
-class GroupPermission(GroupPermissionBase):
+class GroupMember(GroupMemberBase):
     id: UUID4
     group_id: UUID4
-    permission_id: UUID4
-    granted_at: datetime
-    permission: Optional[Permission] = None
+    user_id: UUID4
+    added_at: datetime
+    added_by: Optional[UUID4] = None
+    active: bool
+    removed_at: Optional[datetime] = None
+    removed_by: Optional[UUID4] = None
 
     class Config:
         from_attributes = True
+
+class UserServiceSubtenantBase(BaseModel):
+    service: str
+    subtenant_id: str
+
+class UserServiceSubtenantCreate(UserServiceSubtenantBase):
+    user_id: UUID4
+    granted_by: Optional[UUID4] = None
+
+class UserServiceSubtenantGrant(UserServiceSubtenantBase):
+    granted_by: Optional[UUID4] = None
+
+class UserServiceSubtenant(UserServiceSubtenantBase):
+    id: UUID4
+    user_id: UUID4
+    granted_at: datetime
+    granted_by: Optional[UUID4] = None
+    active: bool
+    revoked_at: Optional[datetime] = None
+    revoked_by: Optional[UUID4] = None
+
+    class Config:
+        from_attributes = True
+
+class UserAccessCheck(BaseModel):
+    has_access: bool
+    access_details: Optional[UserServiceSubtenant] = None
+
+class UserGroupSummary(BaseModel):
+    group_id: UUID4
+    group_name: str
+    role: Optional[str] = None
+    added_at: datetime
+    active: bool
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -172,9 +177,9 @@ class TokenData(BaseModel):
     email: Optional[str] = None
 
 class UserWithDetails(User):
-    groups: List[Group] = []
     field_values: List[FieldValue] = []
-    user_permissions: List[UserPermission] = []
+    group_memberships: List[GroupMember] = []
+    service_access: List[UserServiceSubtenant] = []
 
     class Config:
         from_attributes = True

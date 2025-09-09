@@ -1,16 +1,10 @@
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Table, UUID as SQLAlchemyUUID
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Table, UUID as SQLAlchemyUUID, Index
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
 import uuid
 
 Base = declarative_base()
 
-user_groups = Table(
-    'user_groups',
-    Base.metadata,
-    Column('user_id', SQLAlchemyUUID(as_uuid=True), ForeignKey('users.id'), primary_key=True),
-    Column('group_id', SQLAlchemyUUID(as_uuid=True), ForeignKey('groups.id'), primary_key=True)
-)
 
 class User(Base):
     __tablename__ = "users"
@@ -25,9 +19,9 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    groups = relationship("Group", secondary=user_groups, back_populates="users")
     field_values = relationship("FieldValue", back_populates="user", cascade="all, delete-orphan")
-    user_permissions = relationship("UserPermission", back_populates="user", cascade="all, delete-orphan")
+    group_memberships = relationship("GroupMember", back_populates="user", foreign_keys="GroupMember.user_id", cascade="all, delete-orphan")
+    service_access = relationship("UserServiceSubtenant", back_populates="user", foreign_keys="UserServiceSubtenant.user_id", cascade="all, delete-orphan")
 
 class Group(Base):
     __tablename__ = "groups"
@@ -40,8 +34,7 @@ class Group(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    users = relationship("User", secondary=user_groups, back_populates="groups")
-    group_permissions = relationship("GroupPermission", back_populates="group", cascade="all, delete-orphan")
+    members = relationship("GroupMember", back_populates="group", cascade="all, delete-orphan")
 
 class Field(Base):
     __tablename__ = "fields"
@@ -70,43 +63,46 @@ class FieldValue(Base):
     user = relationship("User", back_populates="field_values")
     field = relationship("Field", back_populates="field_values")
 
-class Permission(Base):
-    __tablename__ = "permissions"
-
-    id = Column(SQLAlchemyUUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    name = Column(String, unique=True, index=True, nullable=False)
-    description = Column(Text, nullable=True)
-    resource = Column(String, nullable=False)  # users, groups, fields, etc.
-    action = Column(String, nullable=False)    # create, read, update, delete, etc.
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    user_permissions = relationship("UserPermission", back_populates="permission", cascade="all, delete-orphan")
-    group_permissions = relationship("GroupPermission", back_populates="permission", cascade="all, delete-orphan")
-
-class UserPermission(Base):
-    __tablename__ = "user_permissions"
-
-    id = Column(SQLAlchemyUUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    user_id = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    permission_id = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("permissions.id"), nullable=False)
-    value = Column(Text, nullable=True)  # Permission-specific value or metadata
-    granted_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    user = relationship("User", back_populates="user_permissions")
-    permission = relationship("Permission", back_populates="user_permissions")
-
-class GroupPermission(Base):
-    __tablename__ = "group_permissions"
+class GroupMember(Base):
+    __tablename__ = "group_members"
 
     id = Column(SQLAlchemyUUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     group_id = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("groups.id"), nullable=False)
-    permission_id = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("permissions.id"), nullable=False)
-    value = Column(Text, nullable=True)  # Permission-specific value or metadata
-    granted_at = Column(DateTime(timezone=True), server_default=func.now())
+    user_id = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    role = Column(String, nullable=True)  # Optional role within the group
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
+    added_by = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    active = Column(Boolean, default=True, nullable=False)
+    removed_at = Column(DateTime(timezone=True), nullable=True)
+    removed_by = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
-    group = relationship("Group", back_populates="group_permissions")
-    permission = relationship("Permission", back_populates="group_permissions")
+    group = relationship("Group", back_populates="members")
+    user = relationship("User", back_populates="group_memberships", foreign_keys=[user_id])
+    added_by_user = relationship("User", foreign_keys=[added_by], post_update=True)
+    removed_by_user = relationship("User", foreign_keys=[removed_by], post_update=True)
+
+class UserServiceSubtenant(Base):
+    __tablename__ = "user_service_subtenants"
+    __table_args__ = (
+        # Partial unique index: only one active service access per user per service
+        Index('ix_user_service_active_unique', 'user_id', 'service', 
+              unique=True, postgresql_where=Column('active') == True),
+        {'extend_existing': True}
+    )
+
+    id = Column(SQLAlchemyUUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    user_id = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    service = Column(String, nullable=False, index=True)
+    subtenant_id = Column(String, nullable=False, index=True)
+    granted_at = Column(DateTime(timezone=True), server_default=func.now())
+    granted_by = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    active = Column(Boolean, default=True, nullable=False, index=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_by = Column(SQLAlchemyUUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
+    user = relationship("User", back_populates="service_access", foreign_keys=[user_id])
+    granted_by_user = relationship("User", foreign_keys=[granted_by], post_update=True)
+    revoked_by_user = relationship("User", foreign_keys=[revoked_by], post_update=True)
 
 class OTPSession(Base):
     __tablename__ = "otp_sessions"

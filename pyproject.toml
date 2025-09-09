@@ -1,0 +1,42 @@
+[tool.poetry]
+name = "census"
+version = "0.1.0"
+description = "Census User Management API"
+authors = ["User <user@example.com>"]
+readme = "README.md"
+packages = [{include = "app"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.104.1"
+uvicorn = {extras = ["standard"], version = "^0.24.0"}
+sqlalchemy = "^2.0.23"
+psycopg2-binary = "^2.9.9"
+alembic = "^1.13.1"
+pydantic = "^2.5.0"
+python-multipart = "^0.0.6"
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+python-dotenv = "^1.0.0"
+email-validator = "^2.1.0"
+pyotp = "^2.9.0"
+qrcode = {extras = ["pil"], version = "^7.4.2"}
+requests = "^2.31.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.3"
+pytest-asyncio = "^0.21.1"
+httpx = "^0.25.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+dev = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

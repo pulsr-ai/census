@@ -10,7 +10,7 @@ load_dotenv()
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from api.v1.models import Base
+from app.core.models import Base
 
 config = context.config
 

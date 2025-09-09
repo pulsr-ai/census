@@ -36,37 +36,50 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 def get_admin_headers(client):
-    """Helper function to get admin authentication headers via OTP flow"""
-    # Step 1: Initiate login to get OTP session
-    login_response = client.post("/api/v1/auth/login", json={
-        "email": "testadmin@example.com"
-    })
-    assert login_response.status_code == 200
-    login_data = login_response.json()
-    session_id = login_data["session_id"]
-    
-    # Step 2: Verify OTP (we'll use a mock OTP code for testing)
-    # In a real scenario, this would be sent via email
-    otp_response = client.post("/api/v1/auth/verify-otp", json={
-        "session_id": session_id,
-        "otp_code": "123456"  # This should work with a test OTP
-    })
-    
-    if otp_response.status_code == 200:
-        token = otp_response.json()["access_token"]
-        return {"Authorization": f"Bearer {token}"}
-    
-    # If OTP verification fails, we'll need to mock the token
-    from app.core import auth
+    """Helper function to get admin authentication headers"""
+    from app.core import auth, models
     from datetime import timedelta
     
-    # Create a mock admin token for testing (using a valid UUID)
-    import uuid
-    access_token = auth.create_access_token(
-        data={"sub": str(uuid.uuid4()), "email": "testadmin@example.com"},
-        expires_delta=timedelta(minutes=30)
-    )
-    return {"Authorization": f"Bearer {access_token}"}
+    # Get database session
+    db = TestingSessionLocal()
+    try:
+        # Get admin user (should exist from initialization)
+        admin_user = db.query(models.User).filter(models.User.email == "admin@example.com").first()
+        
+        if not admin_user:
+            # Create admin user if not exists
+            admin_user = models.User(
+                email="admin@example.com",
+                is_active=True,
+                is_anonymous=False,
+                otp_verified=True
+            )
+            db.add(admin_user)
+            db.commit()
+            db.refresh(admin_user)
+            
+            # Add to admin group
+            admin_group = db.query(models.Group).filter(models.Group.name == "Admins").first()
+            if admin_group:
+                group_member = models.GroupMember(
+                    user_id=admin_user.id,
+                    group_id=admin_group.id,
+                    role="admin",
+                    active=True,
+                    added_by=admin_user.id
+                )
+                db.add(group_member)
+                db.commit()
+        
+        # Create token with real user ID
+        access_token = auth.create_access_token(
+            data={"sub": str(admin_user.id), "email": admin_user.email},
+            expires_delta=timedelta(minutes=30)
+        )
+        return {"Authorization": f"Bearer {access_token}"}
+        
+    finally:
+        db.close()
 
 @pytest.fixture
 def client():
@@ -113,27 +126,13 @@ def test_admin_uses_otp_like_everyone_else(client):
     assert data["message"] == "OTP sent to your email"
     # No direct password login for admins
 
-def test_permissions_created_via_api(client):
-    """Test that all default permissions are created and accessible via API"""
+def test_permissions_removed_from_api(client):
+    """Test that permissions endpoints have been removed (moved to microservices)"""
     headers = get_admin_headers(client)
     
+    # Permissions endpoints should no longer exist
     response = client.get("/api/v1/permissions/", headers=headers)
-    assert response.status_code == 200
-    
-    permissions = response.json()
-    permission_names = [p["name"] for p in permissions]
-    
-    expected_permissions = [
-        "users:create", "users:read", "users:update", "users:delete",
-        "groups:create", "groups:read", "groups:update", "groups:delete", 
-        "fields:create", "fields:read", "fields:update", "fields:delete",
-        "field_values:set_own", "field_values:set_any",
-        "field_values:read_own", "field_values:read_any",
-        "permissions:manage"
-    ]
-    
-    for perm_name in expected_permissions:
-        assert perm_name in permission_names, f"Permission {perm_name} not found"
+    assert response.status_code == 404  # Endpoint no longer exists
 
 def test_domain_group_creation_via_api(client):
     """Test that domain groups are created when users sign up"""

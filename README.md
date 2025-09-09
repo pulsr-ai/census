@@ -30,8 +30,22 @@ A comprehensive FastAPI-based microservice for user management, authentication, 
   - User-level and group-level permissions
   - Permission inheritance from groups
 
+## ⚡ Quick Start
+
+```bash
+# Install dependencies
+poetry install
+
+# Start development server
+poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Run tests
+poetry run pytest tests/ -v
+```
+
 ## 📋 Table of Contents
 
+- [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [API Endpoints](#api-endpoints)
@@ -43,9 +57,9 @@ A comprehensive FastAPI-based microservice for user management, authentication, 
 ## 🛠 Installation
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.12+
 - PostgreSQL 12+
-- pip
+- Poetry
 
 ### Setup
 
@@ -57,7 +71,7 @@ A comprehensive FastAPI-based microservice for user management, authentication, 
 
 2. **Install dependencies**
    ```bash
-   pip install -r requirements.txt
+   poetry install
    ```
 
 3. **Environment setup**
@@ -73,7 +87,7 @@ A comprehensive FastAPI-based microservice for user management, authentication, 
 
 5. **Run the service**
    ```bash
-   python main.py
+   poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
    # Server runs on http://localhost:8000
    ```
 
@@ -318,13 +332,13 @@ This architecture ensures:
 ### Run Tests
 ```bash
 # Run all tests
-python -m pytest tests/test_api.py -v
+poetry run pytest tests/ -v
 
 # Run specific test
-python -m pytest tests/test_api.py::test_create_user -v
+poetry run pytest tests/test_api.py::test_create_user -v
 
 # Run with coverage
-python -m pytest tests/test_api.py --cov=api
+poetry run pytest tests/ --cov=api
 ```
 
 ### Test Coverage
@@ -356,7 +370,7 @@ census/
 ├── alembic/                 # Database migrations
 ├── tests/
 │   └── test_api.py         # Test suite
-├── requirements.txt
+├── pyproject.toml           # Poetry configuration
 ├── alembic.ini
 ├── main.py
 └── README.md
@@ -367,19 +381,19 @@ census/
 2. Create/update schemas in `schemas.py`
 3. Add business logic to appropriate endpoint file
 4. Write tests in `tests/test_api.py`
-5. Create database migration: `alembic revision --autogenerate -m "description"`
-6. Run tests: `python -m pytest`
+5. Create database migration: `poetry run alembic revision --autogenerate -m "description"`
+6. Run tests: `poetry run pytest`
 
 ### Database Migrations
 ```bash
 # Create migration
-alembic revision --autogenerate -m "Add new feature"
+poetry run alembic revision --autogenerate -m "Add new feature"
 
 # Apply migrations
-alembic upgrade head
+poetry run alembic upgrade head
 
 # Rollback migration
-alembic downgrade -1
+poetry run alembic downgrade -1
 ```
 
 ## 📚 API Documentation
