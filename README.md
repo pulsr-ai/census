@@ -57,7 +57,7 @@ poetry run pytest tests/ -v
 ## 🛠 Installation
 
 ### Prerequisites
-- Python 3.12+
+- Python 3.11+
 - PostgreSQL 12+
 - Poetry
 
