@@ -15,6 +15,13 @@ def create_group(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Only admins can create groups
+    if not auth.is_admin(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can create groups"
+        )
+    
     existing_group = db.query(models.Group).filter(
         models.Group.name == group.name
     ).first()
@@ -67,6 +74,13 @@ def update_group(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Only admins can update groups
+    if not auth.is_admin(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can update groups"
+        )
+    
     group = db.query(models.Group).filter(models.Group.id == group_id).first()
     if group is None:
         raise HTTPException(
@@ -104,6 +118,13 @@ def delete_group(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Only admins can delete groups
+    if not auth.is_admin(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can delete groups"
+        )
+    
     group = db.query(models.Group).filter(models.Group.id == group_id).first()
     if group is None:
         raise HTTPException(
@@ -146,6 +167,13 @@ def add_group_member(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Only admins can add group members
+    if not auth.is_admin(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can add group members"
+        )
+    
     # Check if group exists
     group = db.query(models.Group).filter(models.Group.id == group_id).first()
     if not group:
@@ -196,6 +224,13 @@ def remove_group_member(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Only admins can remove group members
+    if not auth.is_admin(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can remove group members"
+        )
+    
     # Check if group exists
     group = db.query(models.Group).filter(models.Group.id == group_id).first()
     if not group:

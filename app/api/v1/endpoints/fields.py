@@ -13,6 +13,13 @@ def create_field(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Only admins can create fields
+    if not auth.is_admin(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can create fields"
+        )
+    
     existing_field = db.query(models.Field).filter(
         models.Field.name == field.name
     ).first()
@@ -66,6 +73,13 @@ def update_field(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Only admins can update fields
+    if not auth.is_admin(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can update fields"
+        )
+    
     field = db.query(models.Field).filter(models.Field.id == field_id).first()
     if field is None:
         raise HTTPException(
@@ -100,6 +114,13 @@ def delete_field(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Only admins can delete fields
+    if not auth.is_admin(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can delete fields"
+        )
+    
     field = db.query(models.Field).filter(models.Field.id == field_id).first()
     if field is None:
         raise HTTPException(
@@ -118,6 +139,13 @@ def update_or_create_field_by_name(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
+    # Only admins can update or create fields
+    if not auth.is_admin(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can update or create fields"
+        )
+    
     # Try to find existing field by name
     field = db.query(models.Field).filter(models.Field.name == field_name).first()
     
