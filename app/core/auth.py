@@ -65,7 +65,7 @@ Census Team
         """
         
         # Send email via Hermes
-        hermes_url = f"{config.HERMES_BASE.rstrip('/')}/api/emails/send"
+        hermes_url = f"{config.HERMES_BASE.rstrip('/')}/api/v1/emails/send"
         headers = {
             "X-API-Key": config.HERMES_API_KEY,
             "Content-Type": "application/json"
